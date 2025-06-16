@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ArduPilot SITL 3D Viewer</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: Arial; }
+        #info { position: absolute; top: 10px; left: 10px; color: white; background: rgba(0,0,0,0.7); padding: 10px; }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <h3>SITL 3D Viewer</h3>
+        <div>Roll: <span id="roll">0</span>°</div>
+        <div>Pitch: <span id="pitch">0</span>°</div>
+        <div>Yaw: <span id="yaw">0</span>°</div>
+        <div>Alt: <span id="alt">0</span>m</div>
+        <div>Pos: X:<span id="posx">0</span> Y:<span id="posy">0</span></div>
+        <hr style="margin: 5px 0;">
+        <div style="font-size: 0.8em;">
+            <div>マウス操作:</div>
+            <div>• 左ドラッグ: 回転</div>
+            <div>• 右ドラッグ: パン</div>
+            <div>• ホイール: ズーム</div>
+        </div>
+        <hr style="margin: 5px 0;">
+        <button onclick="clearPath()" style="width: 100%; margin-bottom: 5px;">軌跡クリア</button>
+        <button id="followBtn" onclick="toggleFollowMode()" style="width: 100%; background-color: #007bff; color: white; border: none; padding: 5px;">追従モード: OFF</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script>
+        // Three.js setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Lighting
+        const light = new THREE.DirectionalLight(0xffffff, 1);
+        light.position.set(0, 10, 5);
+        scene.add(light);
+        scene.add(new THREE.AmbientLight(0x404040));
+
+        // Ground
+        const groundGeometry = new THREE.PlaneGeometry(1000, 1000);
+        const groundMaterial = new THREE.MeshBasicMaterial({ color: 0x00aa00 });
+        const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+        ground.rotation.x = -Math.PI / 2;
+        scene.add(ground);
+
+        // Create 3DR Iris drone model
+        const drone = new THREE.Group();
+        
+        // Main body - Iris has a black central body
+        const bodyGeometry = new THREE.BoxGeometry(0.6, 0.25, 0.4);
+        const bodyMaterial = new THREE.MeshPhongMaterial({ 
+            color: 0x2d3436,  // Dark gray/black like real Iris
+            shininess: 30
+        });
+        const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+        drone.add(body);
+        
+        // Top cover (slightly raised)
+        const topGeometry = new THREE.BoxGeometry(0.5, 0.08, 0.35);
+        const topMaterial = new THREE.MeshPhongMaterial({ 
+            color: 0x636e72,  // Medium gray
+            shininess: 40
+        });
+        const topCover = new THREE.Mesh(topGeometry, topMaterial);
+        topCover.position.y = 0.165;
+        drone.add(topCover);
+        
+        // Arms - Iris has distinctive blue arms
+        const armMaterial = new THREE.MeshPhongMaterial({ 
+            color: 0x0984e3,  // Bright blue like real Iris
+            shininess: 60
+        });
+        
+        // Calculate arm dimensions first
+        const armLength = 1.8;
+        const armEndDistance = (armLength / 2) * Math.cos(Math.PI / 4); // Distance from center to arm end
+        
+        // Create integrated X-shaped arm design (like right drone)
+        const armGeometry = new THREE.BoxGeometry(armLength, 0.06, 0.1);
+        
+        // First diagonal arm (NE-SW)
+        const arm1 = new THREE.Mesh(armGeometry, armMaterial);
+        arm1.rotation.y = Math.PI / 4; // 45 degrees
+        drone.add(arm1);
+        
+        // Second diagonal arm (NW-SE)
+        const arm2 = new THREE.Mesh(armGeometry, armMaterial);
+        arm2.rotation.y = -Math.PI / 4; // -45 degrees
+        drone.add(arm2);
+        
+        
+        // Motors - Black motors like Iris
+        const motorBodyGeometry = new THREE.CylinderGeometry(0.18, 0.18, 0.2, 12);
+        const motorMaterial = new THREE.MeshPhongMaterial({ 
+            color: 0x2d3436,  // Dark gray/black
+            shininess: 40
+        });
+        
+        // Motor caps
+        const motorCapGeometry = new THREE.CylinderGeometry(0.2, 0.2, 0.03, 12);
+        const motorCapMaterial = new THREE.MeshPhongMaterial({ 
+            color: 0x74b9ff,  // Light blue accent
+            shininess: 90
+        });
+        
+        // Calculate motor positions at the end of arms (X configuration)
+        
+        const motorPositions = [
+            { x: armEndDistance, z: armEndDistance },   // Front-right (X config)
+            { x: -armEndDistance, z: armEndDistance },  // Front-left  
+            { x: armEndDistance, z: -armEndDistance },  // Back-right
+            { x: -armEndDistance, z: -armEndDistance }  // Back-left
+        ];
+        
+        motorPositions.forEach(pos => {
+            // Motor mount (connects arm to motor)
+            const mountGeometry = new THREE.CylinderGeometry(0.12, 0.12, 0.06, 8);
+            const mountMaterial = new THREE.MeshPhongMaterial({ 
+                color: 0x2d3436,
+                shininess: 40
+            });
+            const motorMount = new THREE.Mesh(mountGeometry, mountMaterial);
+            motorMount.position.set(pos.x, 0.03, pos.z);
+            drone.add(motorMount);
+            
+            // Motor body (positioned on top of mount)
+            const motor = new THREE.Mesh(motorBodyGeometry, motorMaterial);
+            motor.position.set(pos.x, 0.16, pos.z);
+            drone.add(motor);
+            
+            // Motor cap with blue accent
+            const motorCap = new THREE.Mesh(motorCapGeometry, motorCapMaterial);
+            motorCap.position.set(pos.x, 0.28, pos.z);
+            drone.add(motorCap);
+        });
+        
+        // Landing gear - Iris has black landing legs
+        const landingGearMaterial = new THREE.MeshPhongMaterial({ 
+            color: 0x2d3436,  // Black like body
+            shininess: 30
+        });
+        
+        // Iris landing legs are thin and extend down
+        const legGeometry = new THREE.CylinderGeometry(0.015, 0.015, 0.35, 8);
+        
+        // Four landing gear legs
+        const gearPositions = [
+            { x: 0.35, z: 0.35 },
+            { x: -0.35, z: 0.35 },
+            { x: 0.35, z: -0.35 },
+            { x: -0.35, z: -0.35 }
+        ];
+        
+        gearPositions.forEach(pos => {
+            const leg = new THREE.Mesh(legGeometry, landingGearMaterial);
+            leg.position.set(pos.x, -0.3, pos.z);
+            drone.add(leg);
+            
+            // Landing foot (small sphere)
+            const footGeometry = new THREE.SphereGeometry(0.025, 8, 8);
+            const foot = new THREE.Mesh(footGeometry, landingGearMaterial);
+            foot.position.set(pos.x, -0.475, pos.z);
+            drone.add(foot);
+        });
+        
+        // Propellers - White propellers like Iris
+        const propellerGroup = new THREE.Group();
+        
+        motorPositions.forEach((pos, index) => {
+            // Create propeller blades
+            const bladeGroup = new THREE.Group();
+            
+            // Two blades per propeller
+            for (let i = 0; i < 2; i++) {
+                const bladeGeometry = new THREE.BoxGeometry(1.0, 0.012, 0.05);
+                const bladeMaterial = new THREE.MeshPhongMaterial({ 
+                    color: 0xffffff,  // White propellers
+                    transparent: true,
+                    opacity: 0.9,
+                    shininess: 100
+                });
+                const blade = new THREE.Mesh(bladeGeometry, bladeMaterial);
+                blade.rotation.y = i * Math.PI;
+                bladeGroup.add(blade);
+            }
+            
+            // Propeller hub
+            const hubGeometry = new THREE.CylinderGeometry(0.05, 0.05, 0.02, 8);
+            const hubMaterial = new THREE.MeshPhongMaterial({ 
+                color: 0x2d3436,  // Black hub
+                shininess: 60
+            });
+            const hub = new THREE.Mesh(hubGeometry, hubMaterial);
+            bladeGroup.add(hub);
+            
+            bladeGroup.position.set(pos.x, 0.32, pos.z);
+            propellerGroup.add(bladeGroup);
+        });
+        
+        drone.add(propellerGroup);
+        drone.propellers = propellerGroup;
+        
+        // Iris gimbal system (distinctive feature)
+        const gimbalGroup = new THREE.Group();
+        
+        // Gimbal mount (black)
+        const gimbalMountGeometry = new THREE.BoxGeometry(0.15, 0.08, 0.12);
+        const gimbalMountMaterial = new THREE.MeshPhongMaterial({ 
+            color: 0x2d3436,
+            shininess: 40
+        });
+        const gimbalMount = new THREE.Mesh(gimbalMountGeometry, gimbalMountMaterial);
+        gimbalMount.position.set(0, -0.15, 0.25);
+        gimbalGroup.add(gimbalMount);
+        
+        // Camera housing (white/gray)
+        const cameraGeometry = new THREE.BoxGeometry(0.12, 0.06, 0.08);
+        const cameraMaterial = new THREE.MeshPhongMaterial({ 
+            color: 0xddd,
+            shininess: 60
+        });
+        const cameraHousing = new THREE.Mesh(cameraGeometry, cameraMaterial);
+        cameraHousing.position.set(0, -0.18, 0.3);
+        gimbalGroup.add(cameraHousing);
+        
+        // Camera lens (black)
+        const lensGeometry = new THREE.CylinderGeometry(0.02, 0.02, 0.02, 8);
+        const lensMaterial = new THREE.MeshPhongMaterial({ 
+            color: 0x000000,
+            shininess: 100
+        });
+        const lens = new THREE.Mesh(lensGeometry, lensMaterial);
+        lens.rotation.x = Math.PI / 2;
+        lens.position.set(0, -0.18, 0.34);
+        gimbalGroup.add(lens);
+        
+        drone.add(gimbalGroup);
+        drone.gimbal = gimbalGroup;
+        
+        // IRIS branding on top
+        const brandGeometry = new THREE.BoxGeometry(0.25, 0.01, 0.1);
+        const brandMaterial = new THREE.MeshPhongMaterial({ 
+            color: 0xffffff,  // White text area
+            shininess: 10
+        });
+        const brand = new THREE.Mesh(brandGeometry, brandMaterial);
+        brand.position.set(0, 0.21, 0);
+        drone.add(brand);
+        
+        // Position drone
+        drone.position.y = 1;
+        scene.add(drone);
+
+        // Camera position
+        camera.position.set(10, 10, 10);
+        camera.lookAt(drone.position);
+        
+        // Add OrbitControls for camera manipulation
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.screenSpacePanning = false;
+        controls.minDistance = 5;
+        controls.maxDistance = 500;
+        controls.maxPolarAngle = Math.PI / 2;
+        
+        // Add grid for better spatial reference
+        const gridHelper = new THREE.GridHelper(1000, 100);
+        scene.add(gridHelper);
+        
+        // Add axis helper
+        const axesHelper = new THREE.AxesHelper(5);
+        scene.add(axesHelper);
+        
+        // Store initial position for relative movement
+        let homePosition = { lat: 0, lon: 0 };
+        let isHomeSet = false;
+        
+        // Flight path tracking
+        const MAX_PATH_POINTS = 10000;
+        const pathPoints = [];
+        let flightPath = null;
+        const pathMaterial = new THREE.LineBasicMaterial({ 
+            color: 0xff00ff,  // Magenta for better visibility
+            linewidth: 3,
+            opacity: 0.8,
+            transparent: true
+        });
+
+        // WebSocket connection
+        let ws;
+        let isConnected = false;
+        
+        function connectWebSocket() {
+            ws = new WebSocket('ws://localhost:3000');
+            
+            ws.onopen = () => {
+                console.log('Connected to server');
+                isConnected = true;
+                document.getElementById('info').style.background = 'rgba(0,100,0,0.7)';
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'attitude') {
+                    // Update drone rotation (convert from NED to Three.js coordinates)
+                    drone.rotation.x = -data.pitch * Math.PI / 180;
+                    drone.rotation.z = data.roll * Math.PI / 180;
+                    drone.rotation.y = -data.yaw * Math.PI / 180;
+                    
+                    // Update display
+                    document.getElementById('roll').textContent = data.roll.toFixed(1);
+                    document.getElementById('pitch').textContent = data.pitch.toFixed(1);
+                    document.getElementById('yaw').textContent = data.yaw.toFixed(1);
+                }
+                
+                if (data.type === 'position') {
+                    // Set home position on first position message
+                    if (!isHomeSet && data.lat && data.lon) {
+                        homePosition.lat = data.lat;
+                        homePosition.lon = data.lon;
+                        isHomeSet = true;
+                        console.log('Home position set:', homePosition);
+                    }
+                    
+                    // Calculate relative position from home
+                    if (isHomeSet) {
+                        // Convert lat/lon difference to meters (approximate)
+                        const latDiff = data.lat - homePosition.lat;
+                        const lonDiff = data.lon - homePosition.lon;
+                        
+                        // 1 degree latitude ≈ 111,111 meters
+                        // 1 degree longitude ≈ 111,111 * cos(latitude) meters
+                        const metersPerDegreeLat = 111111;
+                        const metersPerDegreeLon = 111111 * Math.cos(homePosition.lat * Math.PI / 180);
+                        
+                        // Convert to Unity coordinates (X=East, Z=North)
+                        drone.position.x = lonDiff * metersPerDegreeLon;
+                        drone.position.z = -latDiff * metersPerDegreeLat; // Negative because Z is backwards in Three.js
+                        
+                        // Update position display
+                        document.getElementById('posx').textContent = drone.position.x.toFixed(1);
+                        document.getElementById('posy').textContent = (-drone.position.z).toFixed(1);
+                    }
+                    
+                    // Update altitude
+                    drone.position.y = data.relative_alt || 1;
+                    document.getElementById('alt').textContent = (data.relative_alt || 0).toFixed(1);
+                    
+                    // Update flight path
+                    if (drone.position.y > 0.1) { // Only track when airborne
+                        const newPoint = new THREE.Vector3(
+                            drone.position.x,
+                            drone.position.y,
+                            drone.position.z
+                        );
+                        
+                        // Add point only if it's different from the last point
+                        if (pathPoints.length === 0 || 
+                            pathPoints[pathPoints.length - 1].distanceTo(newPoint) > 0.1) {
+                            
+                            pathPoints.push(newPoint);
+                            
+                            // Limit path points
+                            if (pathPoints.length > MAX_PATH_POINTS) {
+                                pathPoints.shift();
+                            }
+                            
+                            // Update or create flight path line
+                            if (flightPath) {
+                                scene.remove(flightPath);
+                                flightPath.geometry.dispose();
+                            }
+                            
+                            if (pathPoints.length > 1) {
+                                const pathGeometry = new THREE.BufferGeometry().setFromPoints(pathPoints);
+                                flightPath = new THREE.Line(pathGeometry, pathMaterial);
+                                scene.add(flightPath);
+                            }
+                        }
+                    }
+                }
+            };
+            
+            ws.onclose = () => {
+                console.log('Disconnected from server');
+                isConnected = false;
+                document.getElementById('info').style.background = 'rgba(100,0,0,0.7)';
+                // Reconnect after 2 seconds
+                setTimeout(connectWebSocket, 2000);
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+        }
+        
+        // Connect on load
+        connectWebSocket();
+        
+        // Clear path function
+        function clearPath() {
+            pathPoints.length = 0;
+            if (flightPath) {
+                scene.remove(flightPath);
+                flightPath.geometry.dispose();
+                flightPath = null;
+            }
+        }
+        
+        // Make clearPath global
+        window.clearPath = clearPath;
+        
+        // Follow mode functionality
+        let followMode = false;
+        let lastDronePosition = new THREE.Vector3();
+        
+        function toggleFollowMode() {
+            followMode = !followMode;
+            const btn = document.getElementById('followBtn');
+            
+            if (followMode) {
+                btn.textContent = '追従モード: ON';
+                btn.style.backgroundColor = '#28a745'; // Green when active
+                // Set controls target to drone position
+                controls.target.copy(drone.position);
+                // Store current drone position
+                lastDronePosition.copy(drone.position);
+                // Keep orbit controls fully enabled for angle changes
+                controls.enabled = true;
+                controls.enableRotate = true;
+                controls.enableZoom = true;
+                controls.enablePan = true;
+            } else {
+                btn.textContent = '追従モード: OFF';
+                btn.style.backgroundColor = '#007bff'; // Blue when inactive
+                // Controls remain enabled
+                controls.enabled = true;
+            }
+        }
+        
+        // Make toggleFollowMode global
+        window.toggleFollowMode = toggleFollowMode;
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Follow mode: move camera and target when drone moves
+            if (followMode) {
+                // Calculate how much the drone has moved
+                const droneMovement = new THREE.Vector3().copy(drone.position).sub(lastDronePosition);
+                
+                // Only update if drone has actually moved
+                if (droneMovement.length() > 0.01) {
+                    // Move camera and target by the same amount the drone moved
+                    camera.position.add(droneMovement);
+                    controls.target.add(droneMovement);
+                    
+                    // Update last drone position
+                    lastDronePosition.copy(drone.position);
+                }
+            }
+            
+            // Always update camera controls (whether following or not)
+            controls.update();
+            
+            // Animate propellers with individual blade rotation
+            if (drone.propellers && drone.position.y > 0.5) {
+                drone.propellers.children.forEach((bladeGroup, index) => {
+                    // Alternate rotation direction for counter-rotating propellers
+                    const direction = (index % 2 === 0) ? 1 : -1;
+                    bladeGroup.rotation.y += 0.8 * direction;
+                });
+            }
+            
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
