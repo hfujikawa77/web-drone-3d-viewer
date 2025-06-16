@@ -35,19 +35,41 @@
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer();
         renderer.setSize(window.innerWidth, window.innerHeight);
+        
+        // Enable shadows
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Soft shadows
+        
         document.body.appendChild(renderer.domElement);
 
-        // Lighting
+        // Lighting with shadow casting
         const light = new THREE.DirectionalLight(0xffffff, 1);
-        light.position.set(0, 10, 5);
+        light.position.set(20, 50, 20); // Position sun-like light source
+        light.castShadow = true;
+        
+        // Configure shadow properties
+        light.shadow.mapSize.width = 2048;
+        light.shadow.mapSize.height = 2048;
+        light.shadow.camera.near = 0.5;
+        light.shadow.camera.far = 100;
+        light.shadow.camera.left = -50;
+        light.shadow.camera.right = 50;
+        light.shadow.camera.top = 50;
+        light.shadow.camera.bottom = -50;
+        light.shadow.bias = -0.0001;
+        
         scene.add(light);
-        scene.add(new THREE.AmbientLight(0x404040));
+        
+        // Ambient light for overall illumination
+        const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
+        scene.add(ambientLight);
 
-        // Ground
+        // Ground with shadow receiving
         const groundGeometry = new THREE.PlaneGeometry(1000, 1000);
-        const groundMaterial = new THREE.MeshBasicMaterial({ color: 0x00aa00 });
+        const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x00aa00 });
         const ground = new THREE.Mesh(groundGeometry, groundMaterial);
         ground.rotation.x = -Math.PI / 2;
+        ground.receiveShadow = true; // Enable shadow receiving
         scene.add(ground);
 
         // Create 3DR Iris drone model
@@ -253,6 +275,13 @@
         const brand = new THREE.Mesh(brandGeometry, brandMaterial);
         brand.position.set(0, 0.21, 0);
         drone.add(brand);
+        
+        // Enable shadow casting for all drone components
+        drone.traverse(function(child) {
+            if (child.isMesh) {
+                child.castShadow = true;
+            }
+        });
         
         // Position drone
         drone.position.y = 1;
