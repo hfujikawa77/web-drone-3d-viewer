@@ -4,7 +4,7 @@
     <title>ArduPilot SITL 3D Viewer</title>
     <style>
         body { margin: 0; overflow: hidden; font-family: Arial; }
-        #info { position: absolute; top: 10px; left: 10px; color: white; background: rgba(0,0,0,0.7); padding: 10px; }
+        #info { position: absolute; top: 10px; left: 10px; width: 140px; color: white; background: rgba(0,0,0,0.7); padding: 10px; }
     </style>
 </head>
 <body>
@@ -15,6 +15,7 @@
         <div>Yaw: <span id="yaw">0</span>°</div>
         <div>Alt: <span id="alt">0</span>m</div>
         <div>Pos: X:<span id="posx">0</span> Y:<span id="posy">0</span></div>
+        <div>Status: <span id="armStatus">DISARMED</span></div>
         <hr style="margin: 5px 0;">
         <div style="font-size: 0.8em;">
             <div>マウス操作:</div>
@@ -118,15 +119,15 @@
         drone.add(arm2);
         
         
-        // Motors - Black motors like Iris
-        const motorBodyGeometry = new THREE.CylinderGeometry(0.18, 0.18, 0.2, 12);
+        // Motors - Black motors like Iris (smaller size)
+        const motorBodyGeometry = new THREE.CylinderGeometry(0.12, 0.12, 0.15, 12);
         const motorMaterial = new THREE.MeshPhongMaterial({ 
             color: 0x2d3436,  // Dark gray/black
             shininess: 40
         });
         
-        // Motor caps
-        const motorCapGeometry = new THREE.CylinderGeometry(0.2, 0.2, 0.03, 12);
+        // Motor caps (smaller)
+        const motorCapGeometry = new THREE.CylinderGeometry(0.14, 0.14, 0.02, 12);
         const motorCapMaterial = new THREE.MeshPhongMaterial({ 
             color: 0x74b9ff,  // Light blue accent
             shininess: 90
@@ -142,55 +143,45 @@
         ];
         
         motorPositions.forEach(pos => {
-            // Motor mount (connects arm to motor)
-            const mountGeometry = new THREE.CylinderGeometry(0.12, 0.12, 0.06, 8);
+            // Motor mount (connects arm to motor) - smaller
+            const mountGeometry = new THREE.CylinderGeometry(0.08, 0.08, 0.04, 8);
             const mountMaterial = new THREE.MeshPhongMaterial({ 
                 color: 0x2d3436,
                 shininess: 40
             });
             const motorMount = new THREE.Mesh(mountGeometry, mountMaterial);
-            motorMount.position.set(pos.x, 0.03, pos.z);
+            motorMount.position.set(pos.x, 0.02, pos.z);
             drone.add(motorMount);
             
-            // Motor body (positioned on top of mount)
+            // Motor body (positioned on top of mount) - adjusted height
             const motor = new THREE.Mesh(motorBodyGeometry, motorMaterial);
-            motor.position.set(pos.x, 0.16, pos.z);
+            motor.position.set(pos.x, 0.115, pos.z);
             drone.add(motor);
             
-            // Motor cap with blue accent
+            // Motor cap with blue accent - adjusted height
             const motorCap = new THREE.Mesh(motorCapGeometry, motorCapMaterial);
-            motorCap.position.set(pos.x, 0.28, pos.z);
+            motorCap.position.set(pos.x, 0.2, pos.z);
             drone.add(motorCap);
-        });
-        
-        // Landing gear - Iris has black landing legs
-        const landingGearMaterial = new THREE.MeshPhongMaterial({ 
-            color: 0x2d3436,  // Black like body
-            shininess: 30
-        });
-        
-        // Iris landing legs are thin and extend down
-        const legGeometry = new THREE.CylinderGeometry(0.015, 0.015, 0.35, 8);
-        
-        // Four landing gear legs
-        const gearPositions = [
-            { x: 0.35, z: 0.35 },
-            { x: -0.35, z: 0.35 },
-            { x: 0.35, z: -0.35 },
-            { x: -0.35, z: -0.35 }
-        ];
-        
-        gearPositions.forEach(pos => {
+            
+            // Landing gear attached to motor
+            const landingGearMaterial = new THREE.MeshPhongMaterial({ 
+                color: 0x2d3436,  // Black like body
+                shininess: 30
+            });
+            
+            // Landing leg extending down from motor
+            const legGeometry = new THREE.CylinderGeometry(0.012, 0.012, 0.25, 8);
             const leg = new THREE.Mesh(legGeometry, landingGearMaterial);
-            leg.position.set(pos.x, -0.3, pos.z);
+            leg.position.set(pos.x, -0.125, pos.z);
             drone.add(leg);
             
             // Landing foot (small sphere)
-            const footGeometry = new THREE.SphereGeometry(0.025, 8, 8);
+            const footGeometry = new THREE.SphereGeometry(0.02, 8, 8);
             const foot = new THREE.Mesh(footGeometry, landingGearMaterial);
-            foot.position.set(pos.x, -0.475, pos.z);
+            foot.position.set(pos.x, -0.25, pos.z);
             drone.add(foot);
         });
+        
         
         // Propellers - White propellers like Iris
         const propellerGroup = new THREE.Group();
@@ -222,7 +213,7 @@
             const hub = new THREE.Mesh(hubGeometry, hubMaterial);
             bladeGroup.add(hub);
             
-            bladeGroup.position.set(pos.x, 0.32, pos.z);
+            bladeGroup.position.set(pos.x, 0.22, pos.z);
             propellerGroup.add(bladeGroup);
         });
         
@@ -326,18 +317,40 @@
         // WebSocket connection
         let ws;
         let isConnected = false;
+        let isArmed = false; // Track arm/disarm state
+        let lastArmedState = null; // Track previous state to detect changes
+        
         
         function connectWebSocket() {
             ws = new WebSocket('ws://localhost:3000');
             
             ws.onopen = () => {
-                console.log('Connected to server');
                 isConnected = true;
                 document.getElementById('info').style.background = 'rgba(0,100,0,0.7)';
             };
             
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
+                
+                if (data.type === 'heartbeat') {
+                    // Update arm/disarm state only when it changes
+                    const currentArmedState = data.is_armed;
+                    
+                    // Only update if state has actually changed
+                    if (lastArmedState === null || lastArmedState !== currentArmedState) {
+                        isArmed = currentArmedState;
+                        lastArmedState = currentArmedState;
+                        
+                        const statusElement = document.getElementById('armStatus');
+                        if (isArmed) {
+                            statusElement.textContent = 'ARMED';
+                            statusElement.style.color = '#ff4444'; // Red for armed
+                        } else {
+                            statusElement.textContent = 'DISARMED';
+                            statusElement.style.color = '#44ff44'; // Green for disarmed
+                        }
+                    }
+                }
                 
                 if (data.type === 'attitude') {
                     // Update drone rotation (convert from NED to Three.js coordinates)
@@ -420,7 +433,6 @@
             };
             
             ws.onclose = () => {
-                console.log('Disconnected from server');
                 isConnected = false;
                 document.getElementById('info').style.background = 'rgba(100,0,0,0.7)';
                 // Reconnect after 2 seconds
@@ -428,7 +440,7 @@
             };
             
             ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
+                // Silent error handling
             };
         }
         
@@ -501,13 +513,15 @@
             // Always update camera controls (whether following or not)
             controls.update();
             
-            // Animate propellers with individual blade rotation
-            if (drone.propellers && drone.position.y > 0.5) {
-                drone.propellers.children.forEach((bladeGroup, index) => {
-                    // Alternate rotation direction for counter-rotating propellers
-                    const direction = (index % 2 === 0) ? 1 : -1;
-                    bladeGroup.rotation.y += 0.8 * direction;
-                });
+            // Animate propellers based on ARM/DISARM state
+            if (drone.propellers) {
+                if (isArmed) {
+                    drone.propellers.children.forEach((bladeGroup, index) => {
+                        // Alternate rotation direction for counter-rotating propellers
+                        const direction = (index % 2 === 0) ? 1 : -1;
+                        bladeGroup.rotation.y += 0.8 * direction;
+                    });
+                }
             }
             
             renderer.render(scene, camera);
